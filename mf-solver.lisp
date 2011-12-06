@@ -54,7 +54,7 @@
 (defmethod release ((c counter))
   (sb-thread:with-mutex (*mutex*)
     (format t "~&Wait~%")
-    (sb-thread:condition-wait *wait-queue* *mutex*)
+    (sb-thread:condition-wait *wait-queue* *mutex* :timeout 1);ugly hack
     (format t "~&Release~%")))
 
 ;; vertex
@@ -380,6 +380,10 @@
       (fill-tree nodes)
       (backward-substitution s))))
 
+(defun main-no-output(n)
+  (with-output-to-string (*standard-output* (make-array '(0) :element-type 'base-char
+								 :fill-pointer 0 :adjustable t))
+	     (main n)))
 
 ;; old
 
