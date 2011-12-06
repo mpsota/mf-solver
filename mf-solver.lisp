@@ -12,6 +12,13 @@
 
 ;;;; utils
 
+(defmacro make-thread (expr)
+  (let ((old-io (gensym "OLD-IO")))
+    `(let ((,old-io *standard-output*))
+       (sb-thread:make-thread  (lambda ()
+				 (let ((*standard-output* ,old-io))
+				   ,expr))))))
+
 (defun print-matrix (matrix)
   (loop
      for y from 0 below (car (array-dimensions matrix))
@@ -35,7 +42,7 @@
 (defmethod draw ((v vertex))
   (pprint-tree v))
 
-;; counter
+;; counter - only to see how it works
 
 (defmethod inc ((c counter))
   (sb-thread:with-mutex (*mutex*)
@@ -48,14 +55,7 @@
       (decf (counter c)))
     (format t "~&Counter: ~A~%" (counter c))
     (when (= (counter c) 0)
-      (format t "~&Counter: notify~%")
-      (sb-thread:condition-broadcast *wait-queue*))))
-
-(defmethod release ((c counter))
-  (sb-thread:with-mutex (*mutex*)
-    (format t "~&Wait~%")
-    (sb-thread:condition-wait *wait-queue* *mutex* :timeout 1);ugly hack
-    (format t "~&Release~%")))
+      (format t "~&Counter: notify~%"))))
 
 ;; vertex
 
@@ -79,14 +79,14 @@
 
 (defmethod start :around ((p production))
   (inc (counter p))
-  (sleep (random 1))
+  ;(sleep (random 1))
   (call-next-method)
   (draw  (vertex p))
   (dec (counter p))
   p)
 
 (defun make-node-1 (node)
-  (format t "~A~%" 'node)
+  ;(format t "~A~%" 'node)
   (setf (aref (m node) 1 1)  1
 	(aref (m node) 2 1)  1
 	(aref (m node) 1 2)  0
@@ -98,7 +98,7 @@
   node)
 
 (defun make-node-n (node)
-  (format t "~A~%" 'node)
+  ;(format t "~A~%" 'node)
   (setf (aref (m node) 1 1) -1
 	(aref (m node) 2 1)  1
 	(aref (m node) 1 2)  1
@@ -110,7 +110,7 @@
   node)
 
 (defun make-node-last (node)
-  (format t "~A~%" 'node)
+  ;(format t "~A~%" 'node)
   (setf (aref (m node) 1 1) -1
 	(aref (m node) 2 1)  0
 	(aref (m node) 1 2)  1
@@ -125,7 +125,7 @@
   (loop
      for (node next-node) on nodes
      for first-node = node then nil
-     do
+     collect
        (cond
 	 (first-node (make-node-1 (left (vertex node)))
 		     (make-node-n (right (vertex node))))
@@ -226,13 +226,6 @@
 		   (/ 3rd2
 		      (aref matrix 1 1)))))))))
 
-;; production
-
-(defmethod initialize-instance :after ((p production) &rest initargs) 
-  (declare (ignore initargs))
-  #+nil(sb-thread:make-thread  #'start :arguments p))
-  
-
 (defun solve-vertex (vertex &optional x2 x3)
   (let ((m (m vertex))
 	(v (v vertex))
@@ -280,33 +273,14 @@
        into result
      finally (return (reverse result))))
 
-(defmacro with-threads (counter &body body)
-  (let ((old-io (gensym "OLD-IO"))
-	(instance (gensym "INSTANCE"))
-	(list (gensym "LIST")))
-    `(let ((,list
-	    `(,,@(mapcar (lambda (expr)
-			   `(let ((,instance ,expr)
-				  (,old-io *standard-output*))
-			      (sb-thread:make-thread  (lambda ()
-							(let ((*standard-output* ,old-io))
-							  (start ,instance))))
-			      ,instance))
-			 body))))
-       (release ,counter)
-       ,list)))
 
+(defun make-threads (list)
+  (mapcar #'sb-thread:join-thread
+	  (mapcar (lambda (expr)
+		    (make-thread (start expr)))
+		  list)))
 
-#+nil(defmacro with-threads (counter &body body)
-       "without threads"
-  (let ((old-io *standard-output*))
-    `(let ((list
-	    (list ,@(mapcar (lambda (expr)
-			`(start ,expr))
-		      body))))
-       ;(release ,counter)
-       list)))
-
+  
 (defun make-tree (&optional (n *n*))
   (assert (evenp n))
   (let* ((s (make-instance 'vertex :label 'S))
@@ -328,19 +302,19 @@
 	      append
 		(progn
 		  (incf i 2)
-		  (with-threads counter
-		    (make-instance 'production
-				   :p-type 'p2
-				   :vertex (left (vertex parent))
-				   :counter counter)
-		    (make-instance 'production
-				   :p-type 'p2
-				   :vertex (right (vertex parent))
-				   :counter counter)))
-	      into level
-	      finally (progn
-			(push level parents)
-			(setf nodes (append level nodes)))))
+		  (list
+		   (make-instance 'production
+				  :p-type 'p2
+				  :vertex (left (vertex parent))
+				  :counter counter)
+		   (make-instance 'production
+				  :p-type 'p2
+				  :vertex (right (vertex parent))
+				  :counter counter)))
+	     into level
+	     finally (let ((level (make-threads level)))
+		       (push level parents)
+		       (setf nodes (append level nodes)))))
       (let ((leafs (remove-if (lambda (x)
 				(left (left (vertex x)))) nodes)))
 	(make-nodes leafs))
@@ -373,72 +347,17 @@
 ;;;; entry point
 ;;;;
 
-
+(export 'main)
 (defun main(n)
   (let ((*n* n))
+    ;(setf *solution* (make-array `(,(1+ *n*))))
     (multiple-value-bind (s nodes) (make-tree *n*)
       (fill-tree nodes)
       (backward-substitution s))))
 
 (defun main-no-output(n)
   (with-output-to-string (*standard-output* (make-array '(0) :element-type 'base-char
-								 :fill-pointer 0 :adjustable t))
+							:fill-pointer 0 :adjustable t))
 	     (main n)))
 
-;; old
-
-
-
-(defmacro with-productions (list &body body)
-  (let ((old-io (gensym "old-io")))
-    `(let 
-       ,(loop
-	   for i from 0 
-	   for production in list collect
-	     (destructuring-bind (name (production vertex counter)) production
-	       `(,name (make-instance 'production :p-type ',production :vertex ,vertex :counter ,counter))))
-       (let ((,old-io *standard-output*))
-	 ,@(loop
-	      for production in list
-	      for var = (car production) collect
-		`(sb-thread:make-thread  (lambda ()
-					   (let ((*standard-output* ,old-io))
-					     (start ,var))))))
-       ,@body)))
-
-(defun main-old(&key (a 0) (b 1) (y 20) (n 6))
-  (declare (optimize (debug 3)))
-  (declare (ignore a b y n))
-  (let ((counter (make-instance 'counter))
-	(s (make-instance 'vertex :label 'S))
-	(*idx* 0))
-    (with-productions ((p1 (p1 s counter)))
-      (release counter)
-      (with-productions ((p2a (p2 (left (vertex p1)) counter))
-			 (p2b (p2 (right (vertex p1)) counter)))
-	(release counter)
-	(draw s)
-	(with-productions ((p2c (p2 (left (vertex p2a)) counter))
-			   (p2d (p2 (right (vertex p2a)) counter)))
-	  (release counter)
-	  (make-nodes (list p2c p2d p2b));no threads inside
-	  ;(release counter)
-	  (format t "~&Matrixes - Done~%")
-	  (format t "~&Scalanie~%")
-	  (loop
-	     for group in `((,p2c ,p2d ,p2b)
-			    (,p2a ,p2b)
-			    (,p1))
-	     do (map nil (lambda (node)
-			   (print (label (vertex node)))
-			   (print node)
-			   (concat-nodes node)
-			   ;(unless (eq (label (vertex node))
-			   ; 'root)
-			   (gaussian-elimination (vertex node)));)
-			 group))
-	    (format t "~&Scalanie - DONE~%")
-	    (format t "~&Backward substitution~%")
-	    (draw s))))
-    s))
 
